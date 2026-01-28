@@ -1,0 +1,141 @@
+    # Verifica se está sendo executado como root (não recomendado)
+    if os.name != 'nt' and os.geteuid() == 0:
+        print(f"{LeonardoConstants.Colors.RED}Aviso: Não é recomendado executar como root!{LeonardoConstants.Colors.RESET}")
+        response = input("Continuar mesmo assim? (s/N): ").lower()
+        if response not in ['s', 'sim', 'y', 'yes']:
+            print("Encerrando...")
+            sys.exit(1)
+    
+    # Verifica Python version
+    if sys.version_info < (3, 8):
+        print(f"{LeonardoConstants.Colors.RED}Python 3.8 ou superior é requerido!{LeonardoConstants.Colors.RESET}")
+        sys.exit(1)
+    
+    # Argumentos de linha de comando
+    parser = argparse.ArgumentParser(
+        description=f"Leonardo Pereira OSINT Suite v{LeonardoConstants.VERSION}",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument('--cli', action='store_true', help='Executar em modo CLI')
+    parser.add_argument('--web', action='store_true', help='Executar interface web')
+    parser.add_argument('--install', action='store_true', help='Executar instalação/atualização')
+    parser.add_argument('--check-updates', action='store_true', help='Verificar atualizações')
+    parser.add_argument('--config', help='Caminho do arquivo de configuração')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Modo verboso')
+    parser.add_argument('--debug', action='store_true', help='Modo debug')
+    parser.add_argument('--version', action='store_true', help='Mostrar versão')
+    
+    args = parser.parse_args()
+    
+    # Mostra versão
+    if args.version:
+        print(f"Leonardo Pereira OSINT Suite v{LeonardoConstants.VERSION}")
+        print(f"Desenvolvido por: {LeonardoConstants.AUTHOR}")
+        print(f"Licença: {LeonardoConstants.LICENSE}")
+        sys.exit(0)
+    
+    # Inicializa aplicação
+    app = LeonardoOSINTApp()
+    
+    # Verifica atualizações
+    if args.check_updates:
+        print("\nVerificando atualizações...")
+        installer = LeonardoInstaller(app.config)
+        update_info = installer.check_for_updates()
+        
+        if update_info and not update_info.get('error'):
+            if update_info.get('update_available'):
+                print(f"{LeonardoConstants.Colors.GREEN}Atualização disponível!{LeonardoConstants.Colors.RESET}")
+                print(f"Versão atual: {update_info['current_version']}")
+                print(f"Versão disponível: {update_info['latest_version']}")
+                print(f"Publicada em: {update_info['published_at']}")
+                
+                response = input("\nDeseja instalar a atualização? (s/N): ").lower()
+                if response in ['s', 'sim', 'y', 'yes']:
+                    print("Iniciando instalação...")
+                    # Implementar instalação
+            else:
+                print(f"{LeonardoConstants.Colors.GREEN}Você está na versão mais recente!{LeonardoConstants.Colors.RESET}")
+        else:
+            print(f"{LeonardoConstants.Colors.YELLOW}Não foi possível verificar atualizações{LeonardoConstants.Colors.RESET}")
+        
+        sys.exit(0)
+    
+    # Executa instalação
+    if args.install:
+        print("\nExecutando instalação...")
+        installer = LeonardoInstaller(app.config)
+        
+        # Verifica instalação
+        success, issues = installer.verify_installation()
+        
+        if not success:
+            print(f"{LeonardoConstants.Colors.YELLOW}Problemas encontrados:{LeonardoConstants.Colors.RESET}")
+            for issue in issues:
+                print(f"  - {issue}")
+            
+            response = input("\nDeseja tentar corrigir automaticamente? (s/N): ").lower()
+            if response in ['s', 'sim', 'y', 'yes']:
+                # Instala dependências
+                installer.install_dependencies()
+        
+        sys.exit(0)
+    
+    # Modo de execução
+    if args.web:
+        # Interface web
+        print(f"\n{LeonardoConstants.Colors.CYAN}Iniciando interface web...{LeonardoConstants.Colors.RESET}")
+        
+        # Inicializa interface web
+        web_ui = LeonardoWebUI(app)
+        
+        # Executa em background se CLI também for especificado
+        if args.cli:
+            import threading
+            web_thread = threading.Thread(target=web_ui.run, daemon=True)
+            web_thread.start()
+            print(f"Interface web iniciada em http://{web_ui.host}:{web_ui.port}")
+            print("Execute '--cli' para acessar a interface de linha de comando")
+        else:
+            web_ui.run()
+    
+    elif args.cli:
+        # Interface de linha de comando
+        print(f"\n{LeonardoConstants.Colors.CYAN}Iniciando interface CLI...{LeonardoConstants.Colors.RESET}")
+        app.run()
+    
+    else:
+        # Modo interativo
+        print("\nSelecione o modo de operação:")
+        print("  1. Interface de Linha de Comando (CLI)")
+        print("  2. Interface Web")
+        print("  3. Ambos (CLI + Web)")
+        print("  4. Sair")
+        
+        choice = input("\nOpção: ").strip()
+        
+        if choice == '1':
+            app.run()
+        elif choice == '2':
+            web_ui = LeonardoWebUI(app)
+            web_ui.run()
+        elif choice == '3':
+            web_ui = LeonardoWebUI(app)
+            import threading
+            web_thread = threading.Thread(target=web_ui.run, daemon=True)
+            web_thread.start()
+            print(f"Interface web iniciada em http://{web_ui.host}:{web_ui.port}")
+            app.run()
+        else:
+            print("Encerrando...")
+            sys.exit(0)
+
+except KeyboardInterrupt:
+    print(f"\n\n{LeonardoConstants.Colors.YELLOW}Aplicação interrompida pelo usuário{LeonardoConstants.Colors.RESET}")
+    sys.exit(0)
+
+except Exception as e:
+    print(f"\n{LeonardoConstants.Colors.RED}Erro fatal:{LeonardoConstants.Colors.RESET} {e}")
+    traceback.print_exc()
+    sys.exit(1)

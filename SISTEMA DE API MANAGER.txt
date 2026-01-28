@@ -1,0 +1,566 @@
+class APIType(enum.Enum):
+    """Tipos de APIs suportadas"""
+    SOCIAL_MEDIA = "social_media"
+    DOMAIN_INTEL = "domain_intelligence"
+    EMAIL_INTEL = "email_intelligence"
+    IP_INTEL = "ip_intelligence"
+    THREAT_INTEL = "threat_intelligence"
+    GEOLOCATION = "geolocation"
+    REVERSE_IMAGE = "reverse_image"
+    MALWARE_ANALYSIS = "malware_analysis"
+    VULNERABILITY = "vulnerability"
+    BREACH_CHECK = "breach_check"
+    WHOIS = "whois"
+    DNS = "dns"
+    SSL = "ssl"
+    AI = "ai"
+    GENERAL = "general"
+
+class APIStatus(enum.Enum):
+    """Status das APIs"""
+    NOT_CONFIGURED = "not_configured"
+    CONFIGURED = "configured"
+    TESTING = "testing"
+    ACTIVE = "active"
+    ERROR = "error"
+    RATE_LIMITED = "rate_limited"
+    DISABLED = "disabled"
+
+@dataclasses.dataclass
+class APIInfo:
+    """Informações sobre uma API"""
+    name: str
+    type: 'LeonardoAPIManager.APIType'
+    base_url: str
+    api_key: str = ""
+    api_secret: str = ""
+    rate_limit: int = 0
+    requests_made: int = 0
+    requests_remaining: int = 0
+    reset_time: datetime.datetime = None
+    status: 'LeonardoAPIManager.APIStatus' = APIStatus.NOT_CONFIGURED
+    last_used: datetime.datetime = None
+    error_count: int = 0
+    config: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    
+    def to_dict(self):
+        """Converte para dicionário"""
+        return {
+            'name': self.name,
+            'type': self.type.value,
+            'base_url': self.base_url,
+            'api_key': self.api_key[:4] + '***' if self.api_key else '',
+            'rate_limit': self.rate_limit,
+            'requests_made': self.requests_made,
+            'requests_remaining': self.requests_remaining,
+            'reset_time': self.reset_time.isoformat() if self.reset_time else None,
+            'status': self.status.value,
+            'last_used': self.last_used.isoformat() if self.last_used else None,
+            'error_count': self.error_count,
+            'config': self.config
+        }
+
+def __init__(self, config):
+    """Inicializa o gerenciador de APIs"""
+    self.config = config
+    self.logger = logging.getLogger("LeonardoOSINT.APIManager")
+    self.apis = {}
+    self.api_cache = {}
+    self.cache_ttl = 300  # 5 minutos
+    
+    # Carrega APIs do config
+    self._load_apis_from_config()
+    
+    # Inicializa clientes
+    self._init_api_clients()
+
+def _load_apis_from_config(self):
+    """Carrega APIs do arquivo de configuração"""
+    api_keys_section = self.config.get_section('API_Keys')
+    
+    # Mapeamento de chaves de configuração para APIs
+    api_mappings = {
+        'shodan_api_key': ('Shodan', self.APIType.IP_INTEL, 'https://api.shodan.io'),
+        'virustotal_api_key': ('VirusTotal', self.APIType.THREAT_INTEL, 'https://www.virustotal.com/api/v3'),
+        'censys_api_id': ('Censys', self.APIType.DOMAIN_INTEL, 'https://search.censys.io/api/v2'),
+        'censys_api_secret': ('Censys', self.APIType.DOMAIN_INTEL, 'https://search.censys.io/api/v2'),
+        'securitytrails_api_key': ('SecurityTrails', self.APIType.DOMAIN_INTEL, 'https://api.securitytrails.com/v1'),
+        'whoisxmlapi_key': ('WhoisXMLAPI', self.APIType.WHOIS, 'https://www.whoisxmlapi.com'),
+        'hunter_api_key': ('Hunter.io', self.APIType.EMAIL_INTEL, 'https://api.hunter.io/v2'),
+        'clearbit_api_key': ('Clearbit', self.APIType.EMAIL_INTEL, 'https://company.clearbit.com/v2'),
+        'abuseipdb_api_key': ('AbuseIPDB', self.APIType.IP_INTEL, 'https://api.abuseipdb.com/api/v2'),
+        'binaryedge_api_key': ('BinaryEdge', self.APIType.IP_INTEL, 'https://api.binaryedge.io/v2'),
+        'greynoise_api_key': ('GreyNoise', self.APIType.IP_INTEL, 'https://api.greynoise.io/v3'),
+        'onyphe_api_key': ('Onyphe', self.APIType.IP_INTEL, 'https://www.onyphe.io/api/v2'),
+        'pulsedive_api_key': ('Pulsedive', self.APIType.THREAT_INTEL, 'https://pulsedive.com/api'),
+        'alienvault_otx_key': ('AlienVault OTX', self.APIType.THREAT_INTEL, 'https://otx.alienvault.com/api/v1'),
+        'urlscan_api_key': ('urlscan.io', self.APIType.DOMAIN_INTEL, 'https://urlscan.io/api/v1'),
+        'publicwww_api_key': ('PublicWWW', self.APIType.DOMAIN_INTEL, 'https://publicwww.com'),
+        'spyonweb_api_key': ('SpyOnWeb', self.APIType.DOMAIN_INTEL, 'https://api.spyonweb.com/v1'),
+        'builtwith_api_key': ('BuiltWith', self.APIType.DOMAIN_INTEL, 'https://api.builtwith.com/v21'),
+        'wappalyzer_api_key': ('Wappalyzer', self.APIType.DOMAIN_INTEL, 'https://api.wappalyzer.com/v2'),
+        'google_safe_browsing_key': ('Google Safe Browsing', self.APIType.THREAT_INTEL, 'https://safebrowsing.googleapis.com/v4'),
+        'google_pagespeed_key': ('Google PageSpeed', self.APIType.DOMAIN_INTEL, 'https://www.googleapis.com/pagespeedonline/v5'),
+        'ssllabs_api_key': ('SSL Labs', self.APIType.SSL, 'https://api.ssllabs.com/api/v3'),
+        'hibp_api_key': ('HaveIBeenPwned', self.APIType.BREACH_CHECK, 'https://haveibeenpwned.com/api/v3'),
+        'dehashed_email': ('DeHashed', self.APIType.BREACH_CHECK, 'https://api.dehashed.com'),
+        'dehashed_api_key': ('DeHashed', self.APIType.BREACH_CHECK, 'https://api.dehashed.com'),
+        'twitter_api_key': ('Twitter', self.APIType.SOCIAL_MEDIA, 'https://api.twitter.com/2'),
+        'twitter_api_secret': ('Twitter', self.APIType.SOCIAL_MEDIA, 'https://api.twitter.com/2'),
+        'github_token': ('GitHub', self.APIType.SOCIAL_MEDIA, 'https://api.github.com'),
+        'reddit_client_id': ('Reddit', self.APIType.SOCIAL_MEDIA, 'https://www.reddit.com/api/v1'),
+        'reddit_client_secret': ('Reddit', self.APIType.SOCIAL_MEDIA, 'https://www.reddit.com/api/v1'),
+        'openai_api_key': ('OpenAI', self.APIType.AI, 'https://api.openai.com/v1'),
+        'google_ai_key': ('Google AI', self.APIType.AI, 'https://generativelanguage.googleapis.com'),
+        'anthropic_api_key': ('Anthropic', self.APIType.AI, 'https://api.anthropic.com'),
+    }
+    
+    for config_key, (api_name, api_type, base_url) in api_mappings.items():
+        api_key = api_keys_section.get(config_key, '')
+        if api_key:
+            if api_name not in self.apis:
+                self.apis[api_name] = self.APIInfo(
+                    name=api_name,
+                    type=api_type,
+                    base_url=base_url,
+                    api_key=api_key,
+                    status=self.APIStatus.CONFIGURED
+                )
+            else:
+                # Atualiza chave existente
+                self.apis[api_name].api_key = api_key
+                
+                # Para APIs que precisam de secret também
+                if 'secret' in config_key or 'password' in config_key:
+                    self.apis[api_name].api_secret = api_key
+
+def _init_api_clients(self):
+    """Inicializa clientes para APIs"""
+    self.clients = {}
+    
+    for api_name, api_info in self.apis.items():
+        try:
+            if api_info.status == self.APIStatus.CONFIGURED:
+                client = self._create_api_client(api_info)
+                if client:
+                    self.clients[api_name] = client
+                    api_info.status = self.APIStatus.ACTIVE
+                    self.logger.info(f"Cliente API inicializado: {api_name}")
+        except Exception as e:
+            api_info.status = self.APIStatus.ERROR
+            api_info.error_count += 1
+            self.logger.error(f"Erro ao inicializar API {api_name}: {e}")
+
+def _create_api_client(self, api_info):
+    """Cria cliente para uma API específica"""
+    if api_info.name == 'Shodan':
+        try:
+            import shodan
+            return shodan.Shodan(api_info.api_key)
+        except ImportError:
+            self.logger.warning("Biblioteca shodan não instalada")
+            return None
+    
+    elif api_info.name == 'VirusTotal':
+        try:
+            from virus_total_apis import PublicApi as VirusTotalPublicApi
+            return VirusTotalPublicApi(api_info.api_key)
+        except ImportError:
+            self.logger.warning("Biblioteca virus_total_apis não instalada")
+            return None
+    
+    elif api_info.name == 'GitHub':
+        # Cliente GitHub usando requests
+        class GitHubClient:
+            def __init__(self, token):
+                self.token = token
+                self.base_url = 'https://api.github.com'
+                self.headers = {
+                    'Authorization': f'token {token}',
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            
+            def get_user(self, username):
+                import requests
+                url = f"{self.base_url}/users/{username}"
+                response = requests.get(url, headers=self.headers, timeout=10)
+                return response.json() if response.status_code == 200 else None
+        
+        return GitHubClient(api_info.api_key)
+    
+    # Outras APIs...
+    
+    return None
+
+def make_request(self, api_name, endpoint, method='GET', params=None, data=None, headers=None, cache=True):
+    """Faz requisição para uma API"""
+    if api_name not in self.clients:
+        self.logger.error(f"API não disponível: {api_name}")
+        return None
+    
+    api_info = self.apis.get(api_name)
+    if not api_info:
+        self.logger.error(f"Informações da API não encontradas: {api_name}")
+        return None
+    
+    # Verifica cache
+    cache_key = f"{api_name}:{endpoint}:{hash(str(params))}:{hash(str(data))}"
+    if cache and cache_key in self.api_cache:
+        cached_data, cached_time = self.api_cache[cache_key]
+        if time.time() - cached_time < self.cache_ttl:
+            self.logger.debug(f"Cache hit para {cache_key}")
+            return cached_data
+    
+    try:
+        # Verifica rate limit
+        if api_info.rate_limit > 0 and api_info.requests_remaining <= 0:
+            if api_info.reset_time and datetime.datetime.now() < api_info.reset_time:
+                wait_time = (api_info.reset_time - datetime.datetime.now()).total_seconds()
+                self.logger.warning(f"Rate limit atingido para {api_name}. Aguardando {wait_time:.0f}s")
+                time.sleep(wait_time)
+        
+        # Faz requisição
+        start_time = time.time()
+        
+        if api_name == 'Shodan':
+            result = self._make_shodan_request(api_info, endpoint, params)
+        elif api_name == 'GitHub':
+            result = self._make_github_request(api_info, endpoint, params)
+        else:
+            # Método genérico usando requests
+            result = self._make_generic_request(api_info, endpoint, method, params, data, headers)
+        
+        # Atualiza estatísticas
+        api_info.requests_made += 1
+        if api_info.rate_limit > 0:
+            api_info.requests_remaining = max(0, api_info.requests_remaining - 1)
+        api_info.last_used = datetime.datetime.now()
+        
+        # Log de performance
+        elapsed = time.time() - start_time
+        self.logger.log_performance(f"API {api_name} request", elapsed * 1000, {
+            'endpoint': endpoint,
+            'method': method,
+            'cache': cache
+        })
+        
+        # Atualiza cache
+        if cache and result:
+            self.api_cache[cache_key] = (result, time.time())
+        
+        return result
+        
+    except Exception as e:
+        api_info.error_count += 1
+        api_info.status = self.APIStatus.ERROR
+        self.logger.error(f"Erro na requisição {api_name}: {e}")
+        return None
+
+def _make_shodan_request(self, api_info, endpoint, params):
+    """Faz requisição para API Shodan"""
+    client = self.clients.get('Shodan')
+    if not client:
+        return None
+    
+    try:
+        if endpoint == 'host':
+            ip = params.get('ip', '')
+            if ip:
+                return client.host(ip)
+        elif endpoint == 'search':
+            query = params.get('query', '')
+            if query:
+                return client.search(query)
+        elif endpoint == 'info':
+            return client.info()
+        
+    except Exception as e:
+        if 'rate limit' in str(e).lower():
+            api_info.status = self.APIStatus.RATE_LIMITED
+        raise e
+    
+    return None
+
+def _make_github_request(self, api_info, endpoint, params):
+    """Faz requisição para API GitHub"""
+    client = self.clients.get('GitHub')
+    if not client:
+        return None
+    
+    import requests
+    
+    # Constrói URL
+    url = f"{client.base_url}/{endpoint}"
+    
+    # Adiciona parâmetros
+    if params:
+        url += '?' + '&'.join([f"{k}={v}" for k, v in params.items()])
+    
+    # Faz requisição
+    response = requests.get(url, headers=client.headers, timeout=10)
+    
+    if response.status_code == 200:
+        return response.json()
+    elif response.status_code == 403 and 'rate limit' in response.text.lower():
+        api_info.status = self.APIStatus.RATE_LIMITED
+        # Tenta extrair tempo de reset
+        reset_time = response.headers.get('X-RateLimit-Reset')
+        if reset_time:
+            api_info.reset_time = datetime.datetime.fromtimestamp(int(reset_time))
+        return None
+    else:
+        response.raise_for_status()
+
+def _make_generic_request(self, api_info, endpoint, method, params, data, headers):
+    """Faz requisição genérica usando requests"""
+    import requests
+    
+    # Constrói URL
+    url = f"{api_info.base_url}/{endpoint}"
+    
+    # Headers padrão
+    if headers is None:
+        headers = {}
+    
+    # Adiciona autenticação
+    if api_info.api_key:
+        if 'api_key' in url or 'apikey' in url:
+            # A API espera chave na URL
+            url = url.replace('{api_key}', api_info.api_key)
+        else:
+            # Adiciona header de autenticação
+            headers['Authorization'] = f"Bearer {api_info.api_key}"
+    
+    # Faz requisição
+    if method.upper() == 'GET':
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+    elif method.upper() == 'POST':
+        response = requests.post(url, params=params, json=data, headers=headers, timeout=30)
+    elif method.upper() == 'PUT':
+        response = requests.put(url, params=params, json=data, headers=headers, timeout=30)
+    elif method.upper() == 'DELETE':
+        response = requests.delete(url, params=params, headers=headers, timeout=30)
+    else:
+        raise ValueError(f"Método não suportado: {method}")
+    
+    # Processa resposta
+    if response.status_code == 200:
+        try:
+            return response.json()
+        except:
+            return response.text
+    elif response.status_code == 429:  # Rate limit
+        api_info.status = self.APIStatus.RATE_LIMITED
+        # Tenta extrair tempo de reset
+        reset_time = response.headers.get('X-RateLimit-Reset')
+        if reset_time:
+            api_info.reset_time = datetime.datetime.fromtimestamp(int(reset_time))
+        return None
+    else:
+        response.raise_for_status()
+
+def get_api_status(self, api_name=None):
+    """Obtém status das APIs"""
+    if api_name:
+        if api_name in self.apis:
+            return self.apis[api_name].to_dict()
+        return None
+    else:
+        return {name: api.to_dict() for name, api in self.apis.items()}
+
+def test_api(self, api_name):
+    """Testa uma API específica"""
+    if api_name not in self.apis:
+        return False, "API não encontrada"
+    
+    api_info = self.apis[api_name]
+    
+    try:
+        # Testa baseado no tipo de API
+        if api_info.type == self.APIType.SOCIAL_MEDIA:
+            result = self.test_social_media_api(api_name)
+        elif api_info.type == self.APIType.DOMAIN_INTEL:
+            result = self.test_domain_api(api_name)
+        elif api_info.type == self.APIType.IP_INTEL:
+            result = self.test_ip_api(api_name)
+        else:
+            result = self.test_generic_api(api_name)
+        
+        if result:
+            api_info.status = self.APIStatus.ACTIVE
+            return True, "API testada com sucesso"
+        else:
+            api_info.status = self.APIStatus.ERROR
+            return False, "Falha no teste da API"
+            
+    except Exception as e:
+        api_info.status = self.APIStatus.ERROR
+        return False, f"Erro no teste: {str(e)}"
+
+def test_social_media_api(self, api_name):
+    """Testa API de redes sociais"""
+    if api_name == 'GitHub':
+        result = self.make_request('GitHub', 'user/octocat', cache=False)
+        return result is not None and 'login' in result
+    # Outras APIs de redes sociais...
+    return False
+
+def test_domain_api(self, api_name):
+    """Testa API de domínios"""
+    if api_name == 'Shodan':
+        result = self.make_request('Shodan', 'info', cache=False)
+        return result is not None and 'query_credits' in result
+    # Outras APIs de domínios...
+    return False
+
+def test_ip_api(self, api_name):
+    """Testa API de IPs"""
+    if api_name == 'Shodan':
+        # Testa com IP conhecido (Google DNS)
+        result = self.make_request('Shodan', 'host', {'ip': '8.8.8.8'}, cache=False)
+        return result is not None and 'ip_str' in result
+    return False
+
+def test_generic_api(self, api_name):
+    """Testa API genérica"""
+    # Tenta fazer uma requisição simples
+    try:
+        api_info = self.apis[api_name]
+        import requests
+        
+        test_url = f"{api_info.base_url}/"
+        headers = {}
+        
+        if api_info.api_key:
+            headers['Authorization'] = f"Bearer {api_info.api_key}"
+        
+        response = requests.get(test_url, headers=headers, timeout=10)
+        return response.status_code in [200, 201, 204]
+    except:
+        return False
+
+def clear_cache(self, api_name=None):
+    """Limpa cache das APIs"""
+    if api_name:
+        # Remove entradas específicas da API
+        keys_to_remove = [k for k in self.api_cache.keys() if k.startswith(f"{api_name}:")]
+        for key in keys_to_remove:
+            del self.api_cache[key]
+        self.logger.info(f"Cache limpo para API: {api_name}")
+    else:
+        # Limpa todo o cache
+        self.api_cache.clear()
+        self.logger.info("Cache de APIs completamente limpo")
+
+def get_rate_limit_info(self, api_name):
+    """Obtém informações de rate limit"""
+    if api_name in self.apis:
+        api_info = self.apis[api_name]
+        return {
+            'rate_limit': api_info.rate_limit,
+            'requests_made': api_info.requests_made,
+            'requests_remaining': api_info.requests_remaining,
+            'reset_time': api_info.reset_time.isoformat() if api_info.reset_time else None
+        }
+    return None
+
+def add_custom_api(self, name, api_type, base_url, api_key='', api_secret='', config=None):
+    """Adiciona API personalizada"""
+    if config is None:
+        config = {}
+    
+    api_info = self.APIInfo(
+        name=name,
+        type=self.APIType(api_type),
+        base_url=base_url,
+        api_key=api_key,
+        api_secret=api_secret,
+        config=config,
+        status=self.APIStatus.CONFIGURED if api_key else self.APIStatus.NOT_CONFIGURED
+    )
+    
+    self.apis[name] = api_info
+    
+    # Tenta criar cliente
+    if api_key:
+        try:
+            client = self._create_api_client(api_info)
+            if client:
+                self.clients[name] = client
+                api_info.status = self.APIStatus.ACTIVE
+        except Exception as e:
+            api_info.status = self.APIStatus.ERROR
+            self.logger.error(f"Erro ao criar cliente para API personalizada {name}: {e}")
+    
+    self.logger.info(f"API personalizada adicionada: {name}")
+    return True
+
+def remove_api(self, api_name):
+    """Remove uma API"""
+    if api_name in self.apis:
+        # Remove cliente
+        if api_name in self.clients:
+            del self.clients[api_name]
+        
+        # Remove API
+        del self.apis[api_name]
+        
+        # Limpa cache
+        self.clear_cache(api_name)
+        
+        self.logger.info(f"API removida: {api_name}")
+        return True
+    
+    return False
+
+def export_api_config(self, api_name=None):
+    """Exporta configuração das APIs"""
+    if api_name:
+        if api_name in self.apis:
+            return self.apis[api_name].to_dict()
+        return None
+    else:
+        return {name: api.to_dict() for name, api in self.apis.items()}
+
+def import_api_config(self, config_data, merge=True):
+    """Importa configuração de APIs"""
+    try:
+        if merge:
+            for api_name, api_config in config_data.items():
+                if api_name in self.apis:
+                    # Atualiza API existente
+                    self.apis[api_name].api_key = api_config.get('api_key', '')
+                    self.apis[api_name].api_secret = api_config.get('api_secret', '')
+                    self.apis[api_name].config.update(api_config.get('config', {}))
+                else:
+                    # Adiciona nova API
+                    self.add_custom_api(
+                        name=api_name,
+                        api_type=api_config.get('type', 'general'),
+                        base_url=api_config.get('base_url', ''),
+                        api_key=api_config.get('api_key', ''),
+                        api_secret=api_config.get('api_secret', ''),
+                        config=api_config.get('config', {})
+                    )
+        else:
+            # Substitui completamente
+            self.apis.clear()
+            self.clients.clear()
+            self.api_cache.clear()
+            
+            for api_name, api_config in config_data.items():
+                self.add_custom_api(
+                    name=api_name,
+                    api_type=api_config.get('type', 'general'),
+                    base_url=api_config.get('base_url', ''),
+                    api_key=api_config.get('api_key', ''),
+                    api_secret=api_config.get('api_secret', ''),
+                    config=api_config.get('config', {})
+                )
+        
+        self.logger.info("Configuração de APIs importada com sucesso")
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao importar configuração de APIs: {e}")
+        return False

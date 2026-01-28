@@ -1,0 +1,254 @@
+def __init__(self, app):
+    """Inicializa a interface web"""
+    self.app = app
+    self.config = app.config
+    self.logger = logging.getLogger("LeonardoOSINT.WebUI")
+    
+    # Configurações da UI
+    self.host = self.config.get('UI', 'host', '127.0.0.1')
+    self.port = self.config.get('UI', 'port', 8080)
+    self.debug = self.config.get('Advanced', 'debug_mode', False)
+    
+    # Inicializa app web
+    self.web_app = None
+    self._init_web_app()
+
+def _init_web_app(self):
+    """Inicializa aplicação web"""
+    try:
+        from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
+        from flask_socketio import SocketIO, emit
+        
+        self.web_app = Flask(__name__)
+        self.web_app.secret_key = secrets.token_hex(32)
+        self.socketio = SocketIO(self.web_app, cors_allowed_origins="*")
+        
+        # Configura rotas
+        self._setup_routes()
+        
+        # Configura WebSocket
+        self._setup_websocket()
+        
+        self.logger.info(f"Interface web inicializada em http://{self.host}:{self.port}")
+        
+    except ImportError as e:
+        self.logger.error(f"Bibliotecas web não instaladas: {e}")
+        self.logger.info("Instale com: pip install flask flask-socketio flask-login")
+        self.web_app = None
+
+def _setup_routes(self):
+    """Configura rotas da aplicação web"""
+    if not self.web_app:
+        return
+    
+    from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
+    
+    @self.web_app.route('/')
+    def index():
+        """Página inicial"""
+        return render_template('index.html', 
+                             version=LeonardoConstants.VERSION,
+                             author=LeonardoConstants.AUTHOR)
+    
+    @self.web_app.route('/api/status')
+    def api_status():
+        """API de status"""
+        return jsonify({
+            'status': 'online',
+            'version': LeonardoConstants.VERSION,
+            'modules': len(self.app.module_manager.modules),
+            'active_modules': len([m for m in self.app.module_manager.modules.values() if m.enabled])
+        })
+    
+    @self.web_app.route('/api/modules')
+    def api_modules():
+        """API de módulos"""
+        modules = self.app.module_manager.get_all_modules()
+        return jsonify([module.to_dict() for module in modules])
+    
+    @self.web_app.route('/api/modules/<module_name>/execute', methods=['POST'])
+    def api_execute_module(module_name):
+        """API para executar módulo"""
+        data = request.json
+        target = data.get('target', '')
+        options = data.get('options', {})
+        
+        result = self.app.module_manager.execute_module(module_name, target, options)
+        return jsonify(result)
+    
+    @self.web_app.route('/api/investigate', methods=['POST'])
+    def api_investigate():
+        """API para investigação completa"""
+        data = request.json
+        target = data.get('target', '')
+        modules = data.get('modules', [])
+        
+        if not modules:
+            # Usa todos os módulos habilitados
+            modules = [m.name for m in self.app.module_manager.get_enabled_modules()]
+        
+        results = self.app.module_manager.execute_multiple_modules(modules, target)
+        return jsonify(results)
+    
+    @self.web_app.route('/api/reports/generate', methods=['POST'])
+    def api_generate_report():
+        """API para gerar relatório"""
+        data = request.json
+        report_type = data.get('type', 'investigation')
+        report_data = data.get('data', {})
+        report_format = data.get('format', 'html')
+        
+        # Em produção, usar LeonardoReportGenerator
+        return jsonify({
+            'status': 'success',
+            'message': 'Geração de relatório via API web',
+            'type': report_type,
+            'format': report_format
+        })
+    
+    @self.web_app.route('/api/monitor/jobs', methods=['GET', 'POST'])
+    def api_monitor_jobs():
+        """API para gerenciar jobs de monitoramento"""
+        if request.method == 'GET':
+            jobs = self.app.monitor.get_active_jobs()
+            return jsonify([dataclasses.asdict(job) for job in jobs])
+        else:
+            data = request.json
+            job_type = data.get('type')
+            target = data.get('target')
+            schedule = data.get('schedule', '0 */6 * * *')
+            config = data.get('config', {})
+            
+            job = self.app.monitor.create_monitor_job(job_type, target, schedule, config)
+            return jsonify(dataclasses.asdict(job))
+    
+    @self.web_app.route('/api/automation/workflows', methods=['GET', 'POST'])
+    def api_workflows():
+        """API para gerenciar workflows"""
+        if request.method == 'GET':
+            workflows = self.app.automation.get_active_workflows()
+            return jsonify([dataclasses.asdict(wf) for wf in workflows])
+        else:
+            data = request.json
+            name = data.get('name')
+            workflow_type = data.get('type')
+            description = data.get('description', '')
+            steps_data = data.get('steps', [])
+            schedule = data.get('schedule')
+            config = data.get('config', {})
+            
+            # Converte steps_data para objetos WorkflowStep
+            steps = []
+            for step_data in steps_data:
+                step = self.app.automation.WorkflowStep(
+                    id=step_data.get('id'),
+                    type=step_data.get('type'),
+                    config=step_data.get('config', {}),
+                    next_step=step_data.get('next_step'),
+                    error_step=step_data.get('error_step'),
+                    timeout=step_data.get('timeout', 300)
+                )
+                steps.append(step)
+            
+            workflow = self.app.automation.create_workflow(
+                name, workflow_type, description, steps, config, schedule
+            )
+            return jsonify(dataclasses.asdict(workflow))
+    
+    @self.web_app.route('/static/<path:filename>')
+    def static_files(filename):
+        """Servir arquivos estáticos"""
+        return send_file(f'static/{filename}')
+    
+    @self.web_app.errorhandler(404)
+    def not_found(error):
+        """Página 404"""
+        return jsonify({'error': 'Not found'}), 404
+    
+    @self.web_app.errorhandler(500)
+    def server_error(error):
+        """Página 500"""
+        return jsonify({'error': 'Server error'}), 500
+
+def _setup_websocket(self):
+    """Configura WebSocket"""
+    if not self.socketio:
+        return
+    
+    @self.socketio.on('connect')
+    def handle_connect():
+        self.logger.info("Cliente WebSocket conectado")
+        emit('status', {'status': 'connected', 'time': datetime.datetime.now().isoformat()})
+    
+    @self.socketio.on('disconnect')
+    def handle_disconnect():
+        self.logger.info("Cliente WebSocket desconectado")
+    
+    @self.socketio.on('execute_module')
+    def handle_execute_module(data):
+        module_name = data.get('module')
+        target = data.get('target')
+        options = data.get('options', {})
+        
+        emit('module_status', {'module': module_name, 'status': 'started'})
+        
+        result = self.app.module_manager.execute_module(module_name, target, options)
+        
+        emit('module_result', {
+            'module': module_name,
+            'result': result,
+            'completed_at': datetime.datetime.now().isoformat()
+        })
+    
+    @self.socketio.on('get_logs')
+    def handle_get_logs(data):
+        lines = data.get('lines', 100)
+        
+        # Lê logs recentes
+        log_dir = self.config.get('Logging', 'log_directory', 'logs')
+        log_file = os.path.join(log_dir, 'LeonardoOSINT.log')
+        
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+                recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            
+            emit('logs', {'lines': recent_lines})
+        else:
+            emit('logs', {'lines': ['No log file found']})
+
+def run(self):
+    """Executa a interface web"""
+    if not self.web_app:
+        self.logger.error("Interface web não disponível")
+        return False
+    
+    try:
+        self.logger.info(f"Iniciando interface web em http://{self.host}:{self.port}")
+        
+        if self.socketio:
+            self.socketio.run(
+                self.web_app,
+                host=self.host,
+                port=self.port,
+                debug=self.debug,
+                allow_unsafe_werkzeug=True
+            )
+        else:
+            self.web_app.run(
+                host=self.host,
+                port=self.port,
+                debug=self.debug
+            )
+        
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao iniciar interface web: {e}")
+        return False
+
+def stop(self):
+    """Para a interface web"""
+    # Flask não tem um método stop nativo
+    # Em produção, usar gunicorn ou similar
+    self.logger.info("Interface web parada")

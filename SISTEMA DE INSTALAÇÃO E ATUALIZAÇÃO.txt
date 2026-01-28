@@ -1,0 +1,411 @@
+def __init__(self, config):
+    """Inicializa o instalador"""
+    self.config = config
+    self.logger = logging.getLogger("LeonardoOSINT.Installer")
+    
+    # URLs de atualização
+    self.update_urls = {
+        'stable': 'https://api.github.com/repos/leonardopereira/osint-suite/releases/latest',
+        'beta': 'https://api.github.com/repos/leonardopereira/osint-suite/releases',
+        'nightly': 'https://api.github.com/repos/leonardopereira/osint-suite/commits/main'
+    }
+    
+    # Diretórios
+    self.install_dir = os.path.dirname(os.path.abspath(__file__))
+    self.backup_dir = os.path.join(self.install_dir, 'backups')
+    self.update_dir = os.path.join(self.install_dir, 'updates')
+    
+    # Cria diretórios necessários
+    os.makedirs(self.backup_dir, exist_ok=True)
+    os.makedirs(self.update_dir, exist_ok=True)
+
+def check_for_updates(self):
+    """Verifica se há atualizações disponíveis"""
+    try:
+        import requests
+        
+        update_channel = self.config.get('Updates', 'update_channel', 'stable')
+        update_url = self.update_urls.get(update_channel)
+        
+        if not update_url:
+            self.logger.error(f"Canal de atualização inválido: {update_channel}")
+            return None
+        
+        self.logger.info(f"Verificando atualizações no canal {update_channel}...")
+        
+        headers = {'User-Agent': f'LeonardoOSINT/{LeonardoConstants.VERSION}'}
+        response = requests.get(update_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if update_channel == 'stable':
+            latest_version = data.get('tag_name', '').lstrip('v')
+            release_notes = data.get('body', '')
+            download_url = data.get('assets', [{}])[0].get('browser_download_url', '')
+            
+            update_info = {
+                'channel': update_channel,
+                'latest_version': latest_version,
+                'current_version': LeonardoConstants.VERSION,
+                'release_notes': release_notes,
+                'download_url': download_url,
+                'published_at': data.get('published_at', ''),
+                'update_available': self._compare_versions(latest_version, LeonardoConstants.VERSION) > 0
+            }
+            
+        elif update_channel == 'beta':
+            # Pega a release beta mais recente
+            latest_beta = None
+            for release in data:
+                if release.get('prerelease', False):
+                    latest_beta = release
+                    break
+            
+            if latest_beta:
+                latest_version = latest_beta.get('tag_name', '').lstrip('v')
+                release_notes = latest_beta.get('body', '')
+                download_url = latest_beta.get('assets', [{}])[0].get('browser_download_url', '')
+                
+                update_info = {
+                    'channel': update_channel,
+                    'latest_version': latest_version,
+                    'current_version': LeonardoConstants.VERSION,
+                    'release_notes': release_notes,
+                    'download_url': download_url,
+                    'published_at': latest_beta.get('published_at', ''),
+                    'update_available': self._compare_versions(latest_version, LeonardoConstants.VERSION) > 0
+                }
+            else:
+                update_info = {'error': 'No beta releases found'}
+        
+        else:  # nightly
+            latest_commit = data[0] if isinstance(data, list) else data
+            commit_hash = latest_commit.get('sha', '')[:8]
+            commit_message = latest_commit.get('commit', {}).get('message', '')
+            
+            update_info = {
+                'channel': update_channel,
+                'latest_version': f'nightly-{commit_hash}',
+                'current_version': LeonardoConstants.VERSION,
+                'release_notes': commit_message,
+                'download_url': f"https://github.com/leonardopereira/osint-suite/archive/{commit_hash}.zip",
+                'published_at': latest_commit.get('commit', {}).get('author', {}).get('date', ''),
+                'update_available': True  # Sempre disponível para nightly
+            }
+        
+        if update_info.get('update_available'):
+            self.logger.info(f"Atualização disponível: {update_info['latest_version']}")
+        else:
+            self.logger.info("Nenhuma atualização disponível")
+        
+        return update_info
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao verificar atualizações: {e}")
+        return {'error': str(e)}
+
+def _compare_versions(self, version1, version2):
+    """Compara duas versões semânticas"""
+    def parse_version(version):
+        parts = version.split('.')
+        result = []
+        for part in parts:
+            try:
+                result.append(int(part))
+            except ValueError:
+                result.append(part)
+        return result
+    
+    v1 = parse_version(version1)
+    v2 = parse_version(version2)
+    
+    return (v1 > v2) - (v1 < v2)
+
+def download_update(self, download_url):
+    """Baixa atualização"""
+    try:
+        import requests
+        
+        self.logger.info(f"Baixando atualização de {download_url}")
+        
+        # Cria nome de arquivo único
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = os.path.join(self.update_dir, f"update_{timestamp}.zip")
+        
+        response = requests.get(download_url, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        
+        with open(filename, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    # Log de progresso
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        if int(percent) % 10 == 0:
+                            self.logger.info(f"Download: {percent:.1f}%")
+        
+        self.logger.info(f"Atualização baixada: {filename}")
+        return filename
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao baixar atualização: {e}")
+        return None
+
+def create_backup(self):
+    """Cria backup da instalação atual"""
+    try:
+        import shutil
+        import zipfile
+        
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = os.path.join(self.backup_dir, f"backup_{timestamp}.zip")
+        
+        self.logger.info(f"Criando backup: {backup_file}")
+        
+        with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Adiciona arquivos principais
+            for root, dirs, files in os.walk(self.install_dir):
+                # Exclui diretórios de backup e updates
+                if 'backups' in root or 'updates' in root:
+                    continue
+                
+                for file in files:
+                    if file.endswith(('.py', '.json', '.ini', '.db', '.log')):
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, self.install_dir)
+                        zipf.write(file_path, arcname)
+        
+        # Adiciona configurações
+        config_file = self.config.config_file
+        if os.path.exists(config_file):
+            with zipfile.ZipFile(backup_file, 'a', zipfile.ZIP_DEFLATED) as zipf:
+                zipf.write(config_file, 'config.ini')
+        
+        self.logger.info(f"Backup criado: {backup_file} ({os.path.getsize(backup_file) / 1024:.1f} KB)")
+        return backup_file
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao criar backup: {e}")
+        return None
+
+def install_update(self, update_file):
+    """Instala atualização"""
+    try:
+        import zipfile
+        import shutil
+        
+        self.logger.info(f"Instalando atualização: {update_file}")
+        
+        # Cria backup antes de instalar
+        backup_file = self.create_backup()
+        if not backup_file:
+            self.logger.warning("Não foi possível criar backup")
+        
+        # Extrai atualização
+        extract_dir = os.path.join(self.update_dir, 'extracted')
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        
+        os.makedirs(extract_dir)
+        
+        with zipfile.ZipFile(update_file, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        
+        self.logger.info(f"Atualização extraída para: {extract_dir}")
+        
+        # Determina diretório raiz dentro do zip
+        root_dirs = [d for d in os.listdir(extract_dir) 
+                    if os.path.isdir(os.path.join(extract_dir, d))]
+        
+        if len(root_dirs) == 1:
+            source_dir = os.path.join(extract_dir, root_dirs[0])
+        else:
+            source_dir = extract_dir
+        
+        # Copia arquivos
+        self._copy_update_files(source_dir, self.install_dir)
+        
+        # Limpa
+        shutil.rmtree(extract_dir)
+        os.remove(update_file)
+        
+        self.logger.info("Atualização instalada com sucesso")
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao instalar atualização: {e}")
+        
+        # Tenta restaurar backup
+        if 'backup_file' in locals() and backup_file:
+            self.logger.info("Tentando restaurar backup...")
+            self.restore_backup(backup_file)
+        
+        return False
+
+def _copy_update_files(self, source_dir, target_dir):
+    """Copia arquivos da atualização"""
+    import shutil
+    
+    for item in os.listdir(source_dir):
+        source_path = os.path.join(source_dir, item)
+        target_path = os.path.join(target_dir, item)
+        
+        if os.path.isdir(source_path):
+            if os.path.exists(target_path):
+                shutil.rmtree(target_path)
+            shutil.copytree(source_path, target_path)
+        else:
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            shutil.copy2(source_path, target_path)
+
+def restore_backup(self, backup_file):
+    """Restaura backup"""
+    try:
+        import zipfile
+        import shutil
+        
+        if not os.path.exists(backup_file):
+            self.logger.error(f"Arquivo de backup não encontrado: {backup_file}")
+            return False
+        
+        self.logger.info(f"Restaurando backup: {backup_file}")
+        
+        # Cria diretório temporário
+        temp_dir = os.path.join(self.update_dir, 'restore_temp')
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        
+        os.makedirs(temp_dir)
+        
+        # Extrai backup
+        with zipfile.ZipFile(backup_file, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Restaura arquivos
+        self._copy_update_files(temp_dir, self.install_dir)
+        
+        # Restaura configuração se existir
+        config_backup = os.path.join(temp_dir, 'config.ini')
+        if os.path.exists(config_backup):
+            shutil.copy2(config_backup, self.config.config_file)
+        
+        # Limpa
+        shutil.rmtree(temp_dir)
+        
+        self.logger.info("Backup restaurado com sucesso")
+        return True
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao restaurar backup: {e}")
+        return False
+
+def clean_old_backups(self, keep_last=5):
+    """Limpa backups antigos"""
+    try:
+        backup_files = sorted(
+            [f for f in os.listdir(self.backup_dir) if f.startswith('backup_') and f.endswith('.zip')],
+            key=lambda x: os.path.getmtime(os.path.join(self.backup_dir, x))
+        )
+        
+        if len(backup_files) <= keep_last:
+            return
+        
+        files_to_delete = backup_files[:-keep_last]
+        
+        for file in files_to_delete:
+            file_path = os.path.join(self.backup_dir, file)
+            os.remove(file_path)
+            self.logger.info(f"Backup antigo removido: {file}")
+        
+        self.logger.info(f"Backups antigos limpos. Mantidos: {keep_last}")
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao limpar backups antigos: {e}")
+
+def install_dependencies(self, requirements_file='requirements.txt'):
+    """Instala dependências do projeto"""
+    try:
+        import subprocess
+        import sys
+        
+        if not os.path.exists(requirements_file):
+            self.logger.error(f"Arquivo de requirements não encontrado: {requirements_file}")
+            return False
+        
+        self.logger.info("Instalando dependências...")
+        
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '-r', requirements_file],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode == 0:
+            self.logger.info("Dependências instaladas com sucesso")
+            return True
+        else:
+            self.logger.error(f"Erro ao instalar dependências: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        self.logger.error(f"Erro ao instalar dependências: {e}")
+        return False
+
+def verify_installation(self):
+    """Verifica a instalação"""
+    issues = []
+    
+    # Verifica diretórios necessários
+    required_dirs = [
+        'modules',
+        'reports',
+        'exports',
+        'logs',
+        'cache',
+        'temp',
+        'backups',
+        'updates'
+    ]
+    
+    for dir_name in required_dirs:
+        dir_path = os.path.join(self.install_dir, dir_name)
+        if not os.path.exists(dir_path):
+            issues.append(f"Diretório não encontrado: {dir_name}")
+            os.makedirs(dir_path, exist_ok=True)
+    
+    # Verifica arquivos necessários
+    required_files = [
+        'main.py',
+        'config.ini',
+        'requirements.txt'
+    ]
+    
+    for file_name in required_files:
+        file_path = os.path.join(self.install_dir, file_name)
+        if not os.path.exists(file_path):
+            issues.append(f"Arquivo não encontrado: {file_name}")
+    
+    # Verifica dependências básicas
+    basic_deps = ['requests', 'flask', 'sqlite3']
+    
+    for dep in basic_deps:
+        try:
+            __import__(dep)
+        except ImportError:
+            issues.append(f"Dependência não instalada: {dep}")
+    
+    if issues:
+        self.logger.warning(f"Problemas na instalação: {issues}")
+        return False, issues
+    else:
+        self.logger.info("Instalação verificada com sucesso")
+        return True, []

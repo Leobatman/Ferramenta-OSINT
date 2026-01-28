@@ -1,0 +1,18 @@
+    # Achados
+    findings = data.get('findings', [])
+    if findings:
+        md_content += "\n## Achados\n\n"
+        for finding in findings:
+            severity = finding.get('severity', 'medium').upper()
+            md_content += f"### {finding.get('title', 'Finding')} [{severity}]\n\n"
+            md_content += f"{finding.get('description', '')}\n\n"
+            md_content += f"**Recomendação:** {finding.get('recommendation', '')}\n\n"
+    
+    # Recomendações
+    recommendations = data.get('recommendations', [])
+    if recommendations:
+        md_content += "\n## Recomendações\n\n"
+        for rec in recommendations:
+            md_content += f"- {rec}\n"
+    
+    md_content += f"""

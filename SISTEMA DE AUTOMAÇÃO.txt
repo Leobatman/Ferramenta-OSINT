@@ -1,0 +1,861 @@
+class WorkflowType(enum.Enum):
+    """Tipos de workflows"""
+    INVESTIGATION = "investigation"
+    MONITORING = "monitoring"
+    REPORTING = "reporting"
+    DATA_COLLECTION = "data_collection"
+    ALERTING = "alerting"
+    INTEGRATION = "integration"
+    CUSTOM = "custom"
+
+@dataclasses.dataclass
+class WorkflowStep:
+    """Passo de um workflow"""
+    id: str
+    type: str  # module, api, condition, loop, etc.
+    config: Dict[str, Any]
+    next_step: str = None
+    error_step: str = None
+    timeout: int = 300
+
+@dataclasses.dataclass
+class Workflow:
+    """Workflow de automação"""
+    id: str
+    name: str
+    type: 'LeonardoAutomation.WorkflowType'
+    description: str
+    steps: List['LeonardoAutomation.WorkflowStep']
+    enabled: bool
+    schedule: str = None  # Cron expression
+    last_run: datetime.datetime = None
+    next_run: datetime.datetime = None
+    config: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    created_at: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+    created_by: str = "system"
+
+def __init__(self, config, module_manager, api_manager, monitor):
+    """Inicializa o sistema de automação"""
+    self.config = config
+    self.module_manager = module_manager
+    self.api_manager = api_manager
+    self.monitor = monitor
+    self.logger = logging.getLogger("LeonardoOSINT.Automation")
+    
+    # Banco de dados de workflows
+    self.db_path = self.config.get('Database', 'db_path', 'leonardo_osint.db')
+    self._init_workflow_database()
+    
+    # Workflows ativos
+    self.active_workflows = {}
+    
+    # Engine de workflows
+    self.workflow_engine = None
+    self._init_workflow_engine()
+    
+    # Carrega workflows
+    self.load_workflows()
+
+def _init_workflow_database(self):
+    """Inicializa banco de dados para workflows"""
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    # Tabela de workflows
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workflows (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        type TEXT,
+        description TEXT,
+        steps TEXT,
+        enabled INTEGER,
+        schedule TEXT,
+        last_run DATETIME,
+        next_run DATETIME,
+        config TEXT,
+        created_at DATETIME,
+        created_by TEXT
+    )
+    ''')
+    
+    # Tabela de execuções de workflows
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS workflow_executions (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT,
+        status TEXT,
+        start_time DATETIME,
+        end_time DATETIME,
+        results TEXT,
+        error_message TEXT,
+        created_at DATETIME,
+        FOREIGN KEY (workflow_id) REFERENCES workflows (id)
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def _init_workflow_engine(self):
+    """Inicializa engine de workflows"""
+    # Em produção, integrar com Prefect, Airflow, ou similar
+    # Por enquanto, implementação básica
+    self.logger.info("Engine de workflows inicializada (implementação básica)")
+
+def load_workflows(self):
+    """Carrega workflows do banco de dados"""
+    conn = sqlite3.connect(self.db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM workflows WHERE enabled = 1")
+    rows = cursor.fetchall()
+    
+    for row in rows:
+        # Parse steps
+        steps_data = json.loads(row['steps']) if row['steps'] else []
+        steps = []
+        
+        for step_data in steps_data:
+            step = self.WorkflowStep(
+                id=step_data['id'],
+                type=step_data['type'],
+                config=step_data['config'],
+                next_step=step_data.get('next_step'),
+                error_step=step_data.get('error_step'),
+                timeout=step_data.get('timeout', 300)
+            )
+            steps.append(step)
+        
+        workflow = self.Workflow(
+            id=row['id'],
+            name=row['name'],
+            type=self.WorkflowType(row['type']),
+            description=row['description'],
+            steps=steps,
+            enabled=bool(row['enabled']),
+            schedule=row['schedule'],
+            last_run=datetime.datetime.fromisoformat(row['last_run']) if row['last_run'] else None,
+            next_run=datetime.datetime.fromisoformat(row['next_run']) if row['next_run'] else None,
+            config=json.loads(row['config']) if row['config'] else {},
+            created_at=datetime.datetime.fromisoformat(row['created_at']),
+            created_by=row['created_by']
+        )
+        
+        self.active_workflows[workflow.id] = workflow
+    
+    conn.close()
+    self.logger.info(f"Workflows carregados: {len(self.active_workflows)}")
+
+def create_workflow(self, name, workflow_type, description, steps, config=None, schedule=None, created_by="system"):
+    """Cria novo workflow"""
+    if config is None:
+        config = {}
+    
+    workflow_id = f"workflow_{hashlib.md5(f'{name}:{workflow_type}:{time.time()}'.encode()).hexdigest()[:8]}"
+    
+    workflow = self.Workflow(
+        id=workflow_id,
+        name=name,
+        type=self.WorkflowType(workflow_type),
+        description=description,
+        steps=steps,
+        enabled=True,
+        schedule=schedule,
+        config=config,
+        created_by=created_by
+    )
+    
+    # Salva no banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    # Serializa steps
+    steps_data = []
+    for step in steps:
+        steps_data.append({
+            'id': step.id,
+            'type': step.type,
+            'config': step.config,
+            'next_step': step.next_step,
+            'error_step': step.error_step,
+            'timeout': step.timeout
+        })
+    
+    cursor.execute('''
+    INSERT INTO workflows 
+    (id, name, type, description, steps, enabled, schedule, last_run, next_run, config, created_at, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        workflow.id,
+        workflow.name,
+        workflow.type.value,
+        workflow.description,
+        json.dumps(steps_data),
+        1,
+        workflow.schedule,
+        None,
+        None,
+        json.dumps(workflow.config),
+        workflow.created_at.isoformat(),
+        workflow.created_by
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    # Adiciona aos workflows ativos
+    self.active_workflows[workflow.id] = workflow
+    
+    self.logger.info(f"Workflow criado: {workflow.id} - {workflow.name}")
+    return workflow
+
+def execute_workflow(self, workflow_id, input_data=None):
+    """Executa um workflow"""
+    if workflow_id not in self.active_workflows:
+        self.logger.error(f"Workflow não encontrado: {workflow_id}")
+        return None
+    
+    workflow = self.active_workflows[workflow_id]
+    execution_id = f"exec_{hashlib.md5(f'{workflow_id}:{time.time()}'.encode()).hexdigest()[:8]}"
+    
+    self.logger.info(f"Executando workflow: {workflow.id} - {workflow.name}")
+    
+    # Salva execução
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    INSERT INTO workflow_executions 
+    (id, workflow_id, status, start_time, end_time, results, error_message, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        execution_id,
+        workflow.id,
+        'running',
+        datetime.datetime.now().isoformat(),
+        None,
+        None,
+        None,
+        datetime.datetime.now().isoformat()
+    ))
+    
+    conn.commit()
+    
+    # Executa workflow
+    try:
+        results = self._execute_workflow_steps(workflow, input_data or {})
+        
+        # Atualiza execução
+        cursor.execute('''
+        UPDATE workflow_executions 
+        SET status = ?, end_time = ?, results = ?
+        WHERE id = ?
+        ''', (
+            'completed',
+            datetime.datetime.now().isoformat(),
+            json.dumps(results, default=str),
+            execution_id
+        ))
+        
+        # Atualiza workflow
+        cursor.execute('''
+        UPDATE workflows 
+        SET last_run = ?
+        WHERE id = ?
+        ''', (
+            datetime.datetime.now().isoformat(),
+            workflow.id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        self.logger.info(f"Workflow {workflow.id} executado com sucesso")
+        
+        return {
+            'execution_id': execution_id,
+            'workflow_id': workflow.id,
+            'status': 'completed',
+            'results': results,
+            'execution_time': datetime.datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        # Atualiza execução com erro
+        cursor.execute('''
+        UPDATE workflow_executions 
+        SET status = ?, end_time = ?, error_message = ?
+        WHERE id = ?
+        ''', (
+            'failed',
+            datetime.datetime.now().isoformat(),
+            str(e),
+            execution_id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        self.logger.error(f"Erro na execução do workflow {workflow.id}: {e}")
+        
+        return {
+            'execution_id': execution_id,
+            'workflow_id': workflow.id,
+            'status': 'failed',
+            'error': str(e),
+            'execution_time': datetime.datetime.now().isoformat()
+        }
+
+def _execute_workflow_steps(self, workflow, input_data):
+    """Executa os passos de um workflow"""
+    results = {
+        'workflow_id': workflow.id,
+        'workflow_name': workflow.name,
+        'input_data': input_data,
+        'steps': {},
+        'start_time': datetime.datetime.now().isoformat()
+    }
+    
+    # Mapa de steps por ID
+    steps_by_id = {step.id: step for step in workflow.steps}
+    
+    # Execução sequencial (em produção, suportar paralelismo, condições, etc.)
+    current_step_id = workflow.steps[0].id if workflow.steps else None
+    
+    while current_step_id:
+        if current_step_id not in steps_by_id:
+            break
+        
+        step = steps_by_id[current_step_id]
+        
+        try:
+            self.logger.info(f"Executando passo: {step.id} - {step.type}")
+            
+            # Executa passo baseado no tipo
+            step_result = self._execute_workflow_step(step, input_data, results)
+            
+            # Armazena resultado
+            results['steps'][step.id] = {
+                'type': step.type,
+                'status': 'completed',
+                'result': step_result,
+                'execution_time': datetime.datetime.now().isoformat()
+            }
+            
+            # Determina próximo passo
+            if step_result.get('status') == 'error' and step.error_step:
+                current_step_id = step.error_step
+            else:
+                current_step_id = step.next_step
+            
+        except Exception as e:
+            results['steps'][step.id] = {
+                'type': step.type,
+                'status': 'failed',
+                'error': str(e),
+                'execution_time': datetime.datetime.now().isoformat()
+            }
+            
+            if step.error_step:
+                current_step_id = step.error_step
+            else:
+                raise e
+    
+    results['end_time'] = datetime.datetime.now().isoformat()
+    results['status'] = 'completed'
+    
+    return results
+
+def _execute_workflow_step(self, step, input_data, workflow_results):
+    """Executa um passo específico do workflow"""
+    if step.type == 'module':
+        return self._execute_module_step(step, input_data)
+    elif step.type == 'api':
+        return self._execute_api_step(step, input_data)
+    elif step.type == 'condition':
+        return self._execute_condition_step(step, input_data, workflow_results)
+    elif step.type == 'loop':
+        return self._execute_loop_step(step, input_data, workflow_results)
+    elif step.type == 'transform':
+        return self._execute_transform_step(step, input_data, workflow_results)
+    elif step.type == 'output':
+        return self._execute_output_step(step, input_data, workflow_results)
+    else:
+        raise ValueError(f"Tipo de passo não suportado: {step.type}")
+
+def _execute_module_step(self, step, input_data):
+    """Executa passo de módulo"""
+    module_name = step.config.get('module')
+    target = step.config.get('target') or input_data.get('target', '')
+    options = step.config.get('options', {})
+    
+    if not module_name or not target:
+        return {'status': 'error', 'message': 'Módulo ou alvo não especificado'}
+    
+    # Executa módulo
+    result = self.module_manager.execute_module(module_name, target, options)
+    
+    return {
+        'status': 'success' if result.get('success') else 'error',
+        'result': result,
+        'module': module_name,
+        'target': target
+    }
+
+def _execute_api_step(self, step, input_data):
+    """Executa passo de API"""
+    api_name = step.config.get('api')
+    endpoint = step.config.get('endpoint')
+    method = step.config.get('method', 'GET')
+    params = step.config.get('params', {})
+    
+    if not api_name or not endpoint:
+        return {'status': 'error', 'message': 'API ou endpoint não especificado'}
+    
+    # Substitui variáveis nos parâmetros
+    for key, value in params.items():
+        if isinstance(value, str) and value.startswith('${') and value.endswith('}'):
+            var_name = value[2:-1]
+            params[key] = input_data.get(var_name, '')
+    
+    # Faz requisição
+    if self.api_manager:
+        result = self.api_manager.make_request(api_name, endpoint, method, params)
+        
+        return {
+            'status': 'success' if result else 'error',
+            'result': result,
+            'api': api_name,
+            'endpoint': endpoint
+        }
+    else:
+        return {'status': 'error', 'message': 'API Manager não disponível'}
+
+def _execute_condition_step(self, step, input_data, workflow_results):
+    """Executa passo de condição"""
+    condition = step.config.get('condition')
+    value1 = step.config.get('value1', '')
+    value2 = step.config.get('value2', '')
+    operator = step.config.get('operator', '==')
+    
+    # Extrai valores
+    if isinstance(value1, str) and value1.startswith('${') and value1.endswith('}'):
+        var_name = value1[2:-1]
+        value1 = self._extract_variable_value(var_name, input_data, workflow_results)
+    
+    if isinstance(value2, str) and value2.startswith('${') and value2.endswith('}'):
+        var_name = value2[2:-1]
+        value2 = self._extract_variable_value(var_name, input_data, workflow_results)
+    
+    # Avalia condição
+    condition_met = False
+    
+    if operator == '==':
+        condition_met = value1 == value2
+    elif operator == '!=':
+        condition_met = value1 != value2
+    elif operator == '>':
+        condition_met = value1 > value2
+    elif operator == '<':
+        condition_met = value1 < value2
+    elif operator == '>=':
+        condition_met = value1 >= value2
+    elif operator == '<=':
+        condition_met = value1 <= value2
+    elif operator == 'contains':
+        condition_met = str(value2) in str(value1)
+    elif operator == 'not_contains':
+        condition_met = str(value2) not in str(value1)
+    
+    return {
+        'status': 'success',
+        'condition_met': condition_met,
+        'value1': value1,
+        'value2': value2,
+        'operator': operator
+    }
+
+def _extract_variable_value(self, var_path, input_data, workflow_results):
+    """Extrai valor de uma variável"""
+    parts = var_path.split('.')
+    
+    if parts[0] == 'input':
+        current = input_data
+    elif parts[0] == 'steps':
+        current = workflow_results.get('steps', {})
+    else:
+        return None
+    
+    for part in parts[1:]:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit():
+            current = current[int(part)]
+        else:
+            return None
+    
+    return current
+
+def _execute_loop_step(self, step, input_data, workflow_results):
+    """Executa passo de loop"""
+    items = step.config.get('items', [])
+    item_var = step.config.get('item_var', 'item')
+    
+    results = []
+    
+    for item in items:
+        # Adiciona item ao contexto
+        loop_input = input_data.copy()
+        loop_input[item_var] = item
+        
+        # Executa sub-steps (simplificado)
+        result = {'item': item, 'status': 'processed'}
+        results.append(result)
+    
+    return {
+        'status': 'success',
+        'items_processed': len(items),
+        'results': results
+    }
+
+def _execute_transform_step(self, step, input_data, workflow_results):
+    """Executa passo de transformação"""
+    transform_type = step.config.get('transform_type')
+    input_value = step.config.get('input_value', '')
+    output_var = step.config.get('output_var')
+    
+    # Extrai valor de entrada
+    if isinstance(input_value, str) and input_value.startswith('${') and input_value.endswith('}'):
+        var_name = input_value[2:-1]
+        input_value = self._extract_variable_value(var_name, input_data, workflow_results)
+    
+    # Aplica transformação
+    output_value = input_value
+    
+    if transform_type == 'json_parse':
+        try:
+            output_value = json.loads(str(input_value))
+        except:
+            output_value = str(input_value)
+    elif transform_type == 'json_stringify':
+        output_value = json.dumps(input_value, default=str)
+    elif transform_type == 'extract_email':
+        import re
+        emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', str(input_value))
+        output_value = emails[0] if emails else ''
+    elif transform_type == 'extract_domain':
+        import re
+        from urllib.parse import urlparse
+        if '://' in str(input_value):
+            domain = urlparse(input_value).netloc
+        else:
+            domain = str(input_value).split('@')[-1] if '@' in str(input_value) else str(input_value)
+        output_value = domain
+    elif transform_type == 'to_lowercase':
+        output_value = str(input_value).lower()
+    elif transform_type == 'to_uppercase':
+        output_value = str(input_value).upper()
+    
+    # Armazena resultado
+    if output_var:
+        input_data[output_var] = output_value
+    
+    return {
+        'status': 'success',
+        'transform_type': transform_type,
+        'input_value': input_value,
+        'output_value': output_value,
+        'output_var': output_var
+    }
+
+def _execute_output_step(self, step, input_data, workflow_results):
+    """Executa passo de saída"""
+    output_type = step.config.get('output_type', 'results')
+    output_target = step.config.get('output_target')
+    
+    if output_type == 'report':
+        # Gera relatório
+        report_type = step.config.get('report_type', 'investigation')
+        report_format = step.config.get('format', 'html')
+        
+        # Em produção, usar LeonardoReportGenerator
+        result = {
+            'report_generated': True,
+            'report_type': report_type,
+            'format': report_format,
+            'note': 'Geração de relatório requer LeonardoReportGenerator'
+        }
+    elif output_type == 'notification':
+        # Envia notificação
+        notification_type = step.config.get('notification_type', 'alert')
+        
+        result = {
+            'notification_sent': True,
+            'notification_type': notification_type,
+            'note': 'Notificação requer sistema de alertas configurado'
+        }
+    elif output_type == 'database':
+        # Salva no banco de dados
+        table = step.config.get('table', 'workflow_results')
+        
+        result = {
+            'saved_to_db': True,
+            'table': table,
+            'note': 'Persistência requer implementação específica'
+        }
+    else:
+        # Saída padrão: retorna resultados
+        result = {
+            'output_type': 'results',
+            'data': workflow_results,
+            'note': 'Saída padrão do workflow'
+        }
+    
+    return {
+        'status': 'success',
+        'output_type': output_type,
+        'result': result
+    }
+
+def get_workflow(self, workflow_id):
+    """Obtém um workflow específico"""
+    return self.active_workflows.get(workflow_id)
+
+def get_active_workflows(self):
+    """Obtém workflows ativos"""
+    return list(self.active_workflows.values())
+
+def update_workflow(self, workflow_id, **kwargs):
+    """Atualiza um workflow"""
+    if workflow_id not in self.active_workflows:
+        return False
+    
+    workflow = self.active_workflows[workflow_id]
+    
+    # Atualiza campos
+    for key, value in kwargs.items():
+        if hasattr(workflow, key):
+            setattr(workflow, key, value)
+    
+    # Atualiza banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    # Serializa steps
+    steps_data = []
+    for step in workflow.steps:
+        steps_data.append({
+            'id': step.id,
+            'type': step.type,
+            'config': step.config,
+            'next_step': step.next_step,
+            'error_step': step.error_step,
+            'timeout': step.timeout
+        })
+    
+    cursor.execute('''
+    UPDATE workflows 
+    SET name = ?, type = ?, description = ?, steps = ?, enabled = ?, schedule = ?, config = ?
+    WHERE id = ?
+    ''', (
+        workflow.name,
+        workflow.type.value,
+        workflow.description,
+        json.dumps(steps_data),
+        1 if workflow.enabled else 0,
+        workflow.schedule,
+        json.dumps(workflow.config),
+        workflow.id
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    self.logger.info(f"Workflow atualizado: {workflow_id}")
+    return True
+
+def delete_workflow(self, workflow_id):
+    """Exclui um workflow"""
+    if workflow_id not in self.active_workflows:
+        return False
+    
+    # Remove dos workflows ativos
+    del self.active_workflows[workflow_id]
+    
+    # Remove do banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+    cursor.execute("DELETE FROM workflow_executions WHERE workflow_id = ?", (workflow_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    self.logger.info(f"Workflow excluído: {workflow_id}")
+    return True
+
+def get_workflow_executions(self, workflow_id=None, limit=50):
+    """Obtém execuções de workflows"""
+    conn = sqlite3.connect(self.db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    if workflow_id:
+        cursor.execute('''
+        SELECT * FROM workflow_executions 
+        WHERE workflow_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        ''', (workflow_id, limit))
+    else:
+        cursor.execute('''
+        SELECT * FROM workflow_executions 
+        ORDER BY created_at DESC
+        LIMIT ?
+        ''', (limit,))
+    
+    rows = cursor.fetchall()
+    executions = []
+    
+    for row in rows:
+        execution = {
+            'id': row['id'],
+            'workflow_id': row['workflow_id'],
+            'status': row['status'],
+            'start_time': row['start_time'],
+            'end_time': row['end_time'],
+            'results': json.loads(row['results']) if row['results'] else None,
+            'error_message': row['error_message'],
+            'created_at': row['created_at']
+        }
+        executions.append(execution)
+    
+    conn.close()
+    return executions
+
+def create_investigation_workflow(self, target, modules=None, schedule=None):
+    """Cria workflow de investigação padrão"""
+    if modules is None:
+        modules = ['domain_intel', 'social_media', 'email_intel']
+    
+    steps = []
+    
+    # Passo 1: Coleta de inteligência de domínio
+    steps.append(self.WorkflowStep(
+        id='step1_domain',
+        type='module',
+        config={
+            'module': 'domain_intel',
+            'target': target,
+            'options': {'analyses': ['dns', 'whois', 'subdomains', 'ssl']}
+        },
+        next_step='step2_social'
+    ))
+    
+    # Passo 2: Análise de redes sociais
+    steps.append(self.WorkflowStep(
+        id='step2_social',
+        type='module',
+        config={
+            'module': 'social_media',
+            'target': target,
+            'options': {'platforms': ['twitter', 'github', 'linkedin']}
+        },
+        next_step='step3_email'
+    ))
+    
+    # Passo 3: Análise de emails
+    steps.append(self.WorkflowStep(
+        id='step3_email',
+        type='module',
+        config={
+            'module': 'email_intel',
+            'target': f'{target}@example.com',  # Placeholder
+            'options': {'verifications': ['format', 'disposable', 'breaches']}
+        },
+        next_step='step4_report'
+    ))
+    
+    # Passo 4: Geração de relatório
+    steps.append(self.WorkflowStep(
+        id='step4_report',
+        type='output',
+        config={
+            'output_type': 'report',
+            'report_type': 'investigation',
+            'format': 'html'
+        }
+    ))
+    
+    workflow = self.create_workflow(
+        name=f"Investigação - {target}",
+        workflow_type='investigation',
+        description=f"Workflow de investigação automatizada para {target}",
+        steps=steps,
+        schedule=schedule
+    )
+    
+    return workflow
+
+def create_monitoring_workflow(self, target, monitor_type, schedule="0 */6 * * *"):
+    """Cria workflow de monitoramento padrão"""
+    steps = []
+    
+    # Passo 1: Monitoramento
+    steps.append(self.WorkflowStep(
+        id='step1_monitor',
+        type='module',
+        config={
+            'module': f'{monitor_type}_intel',
+            'target': target,
+            'options': {}
+        },
+        next_step='step2_check_changes'
+    ))
+    
+    # Passo 2: Verificação de mudanças
+    steps.append(self.WorkflowStep(
+        id='step2_check_changes',
+        type='condition',
+        config={
+            'condition': 'changes_detected',
+            'value1': '${steps.step1_monitor.result.new_findings}',
+            'value2': '0',
+            'operator': '>'
+        },
+        next_step='step3_alert',
+        error_step='step4_end'
+    ))
+    
+    # Passo 3: Alerta
+    steps.append(self.WorkflowStep(
+        id='step3_alert',
+        type='output',
+        config={
+            'output_type': 'notification',
+            'notification_type': 'alert'
+        },
+        next_step='step4_end'
+    ))
+    
+    # Passo 4: Fim
+    steps.append(self.WorkflowStep(
+        id='step4_end',
+        type='output',
+        config={
+            'output_type': 'results'
+        }
+    ))
+    
+    workflow = self.create_workflow(
+        name=f"Monitoramento - {target}",
+        workflow_type='monitoring',
+        description=f"Workflow de monitoramento para {target}",
+        steps=steps,
+        schedule=schedule
+    )
+    
+    return workflow

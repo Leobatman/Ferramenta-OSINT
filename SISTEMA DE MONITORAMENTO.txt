@@ -1,0 +1,903 @@
+class MonitorType(enum.Enum):
+    """Tipos de monitoramento"""
+    DOMAIN = "domain"
+    IP = "ip"
+    EMAIL = "email"
+    KEYWORD = "keyword"
+    SOCIAL_MEDIA = "social_media"
+    DARK_WEB = "dark_web"
+    VULNERABILITY = "vulnerability"
+    DATA_BREACH = "data_breach"
+    BRAND = "brand"
+    PERSON = "person"
+    COMPETITOR = "competitor"
+    CUSTOM = "custom"
+
+class AlertLevel(enum.Enum):
+    """Níveis de alerta"""
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+@dataclasses.dataclass
+class MonitorJob:
+    """Trabalho de monitoramento"""
+    id: str
+    type: 'LeonardoMonitor.MonitorType'
+    target: str
+    schedule: str  # Cron expression
+    enabled: bool
+    last_run: datetime.datetime = None
+    next_run: datetime.datetime = None
+    config: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    created_at: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+    created_by: str = "system"
+
+@dataclasses.dataclass
+class Alert:
+    """Alerta do sistema"""
+    id: str
+    monitor_id: str
+    level: 'LeonardoMonitor.AlertLevel'
+    title: str
+    message: str
+    data: Dict[str, Any]
+    acknowledged: bool = False
+    acknowledged_by: str = None
+    acknowledged_at: datetime.datetime = None
+    created_at: datetime.datetime = dataclasses.field(default_factory=datetime.datetime.now)
+
+def __init__(self, config, module_manager, api_manager):
+    """Inicializa o sistema de monitoramento"""
+    self.config = config
+    self.module_manager = module_manager
+    self.api_manager = api_manager
+    self.logger = logging.getLogger("LeonardoOSINT.Monitor")
+    
+    # Banco de dados de monitoramento
+    self.db_path = self.config.get('Database', 'db_path', 'leonardo_osint.db')
+    self._init_monitor_database()
+    
+    # Agendador
+    self.scheduler = None
+    self._init_scheduler()
+    
+    # Jobs ativos
+    self.active_jobs = {}
+    
+    # Carrega jobs do banco de dados
+    self.load_jobs()
+
+def _init_monitor_database(self):
+    """Inicializa banco de dados para monitoramento"""
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    # Tabela de jobs de monitoramento
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS monitor_jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        target TEXT,
+        schedule TEXT,
+        enabled INTEGER,
+        last_run DATETIME,
+        next_run DATETIME,
+        config TEXT,
+        created_at DATETIME,
+        created_by TEXT
+    )
+    ''')
+    
+    # Tabela de alertas
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS monitor_alerts (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT,
+        level TEXT,
+        title TEXT,
+        message TEXT,
+        data TEXT,
+        acknowledged INTEGER,
+        acknowledged_by TEXT,
+        acknowledged_at DATETIME,
+        created_at DATETIME,
+        FOREIGN KEY (monitor_id) REFERENCES monitor_jobs (id)
+    )
+    ''')
+    
+    # Tabela de resultados de monitoramento
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS monitor_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monitor_id TEXT,
+        execution_time DATETIME,
+        results_count INTEGER,
+        new_findings INTEGER,
+        data TEXT,
+        FOREIGN KEY (monitor_id) REFERENCES monitor_jobs (id)
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def _init_scheduler(self):
+    """Inicializa agendador de jobs"""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        self.logger.info("Agendador de monitoramento inicializado")
+        
+    except ImportError:
+        self.logger.warning("APScheduler não instalado. Monitoramento agendado não disponível.")
+        self.scheduler = None
+
+def load_jobs(self):
+    """Carrega jobs do banco de dados"""
+    conn = sqlite3.connect(self.db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM monitor_jobs WHERE enabled = 1")
+    rows = cursor.fetchall()
+    
+    for row in rows:
+        job = self.MonitorJob(
+            id=row['id'],
+            type=self.MonitorType(row['type']),
+            target=row['target'],
+            schedule=row['schedule'],
+            enabled=bool(row['enabled']),
+            last_run=datetime.datetime.fromisoformat(row['last_run']) if row['last_run'] else None,
+            next_run=datetime.datetime.fromisoformat(row['next_run']) if row['next_run'] else None,
+            config=json.loads(row['config']) if row['config'] else {},
+            created_at=datetime.datetime.fromisoformat(row['created_at']),
+            created_by=row['created_by']
+        )
+        
+        self.active_jobs[job.id] = job
+        
+        # Agenda job se o scheduler estiver disponível
+        if self.scheduler and job.enabled:
+            self._schedule_job(job)
+    
+    conn.close()
+    self.logger.info(f"Jobs de monitoramento carregados: {len(self.active_jobs)}")
+
+def _schedule_job(self, job):
+    """Agenda um job no scheduler"""
+    if not self.scheduler:
+        return
+    
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        
+        trigger = CronTrigger.from_crontab(job.schedule)
+        
+        # Cria função wrapper para o job
+        def job_wrapper():
+            try:
+                self.execute_monitor_job(job.id)
+            except Exception as e:
+                self.logger.error(f"Erro no job {job.id}: {e}")
+        
+        # Adiciona job ao scheduler
+        self.scheduler.add_job(
+            job_wrapper,
+            trigger=trigger,
+            id=job.id,
+            replace_existing=True
+        )
+        
+        self.logger.info(f"Job agendado: {job.id} - {job.schedule}")
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao agendar job {job.id}: {e}")
+
+def create_monitor_job(self, job_type, target, schedule, config=None, created_by="system"):
+    """Cria novo job de monitoramento"""
+    if config is None:
+        config = {}
+    
+    job_id = f"monitor_{hashlib.md5(f'{job_type}:{target}:{time.time()}'.encode()).hexdigest()[:8]}"
+    
+    job = self.MonitorJob(
+        id=job_id,
+        type=self.MonitorType(job_type),
+        target=target,
+        schedule=schedule,
+        enabled=True,
+        config=config,
+        created_by=created_by
+    )
+    
+    # Calcula próximo run
+    job.next_run = self._calculate_next_run(schedule)
+    
+    # Salva no banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    INSERT INTO monitor_jobs 
+    (id, type, target, schedule, enabled, last_run, next_run, config, created_at, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        job.id,
+        job.type.value,
+        job.target,
+        job.schedule,
+        1,
+        None,
+        job.next_run.isoformat() if job.next_run else None,
+        json.dumps(job.config),
+        job.created_at.isoformat(),
+        job.created_by
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    # Adiciona aos jobs ativos
+    self.active_jobs[job.id] = job
+    
+    # Agenda job
+    if self.scheduler:
+        self._schedule_job(job)
+    
+    self.logger.info(f"Job de monitoramento criado: {job.id}")
+    return job
+
+def _calculate_next_run(self, schedule):
+    """Calcula próximo horário de execução baseado na schedule"""
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        trigger = CronTrigger.from_crontab(schedule)
+        return trigger.get_next_fire_time(None, datetime.datetime.now())
+    except:
+        # Fallback simples
+        return datetime.datetime.now() + datetime.timedelta(hours=1)
+
+def execute_monitor_job(self, job_id):
+    """Executa um job de monitoramento"""
+    if job_id not in self.active_jobs:
+        self.logger.error(f"Job não encontrado: {job_id}")
+        return
+    
+    job = self.active_jobs[job_id]
+    
+    try:
+        self.logger.info(f"Executando job de monitoramento: {job.id} - {job.target}")
+        
+        # Executa monitoramento baseado no tipo
+        results = self._execute_monitoring(job.type, job.target, job.config)
+        
+        # Processa resultados
+        new_findings = self._process_monitor_results(job, results)
+        
+        # Gera alertas se houver novos achados
+        if new_findings:
+            self._generate_alerts(job, new_findings)
+        
+        # Atualiza job
+        job.last_run = datetime.datetime.now()
+        job.next_run = self._calculate_next_run(job.schedule)
+        
+        # Atualiza banco de dados
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        UPDATE monitor_jobs 
+        SET last_run = ?, next_run = ?
+        WHERE id = ?
+        ''', (
+            job.last_run.isoformat(),
+            job.next_run.isoformat() if job.next_run else None,
+            job.id
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        self.logger.info(f"Job {job.id} executado com sucesso. Novos achados: {len(new_findings)}")
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao executar job {job.id}: {e}")
+
+def _execute_monitoring(self, monitor_type, target, config):
+    """Executa monitoramento baseado no tipo"""
+    results = []
+    
+    if monitor_type == self.MonitorType.DOMAIN:
+        results = self._monitor_domain(target, config)
+    elif monitor_type == self.MonitorType.IP:
+        results = self._monitor_ip(target, config)
+    elif monitor_type == self.MonitorType.EMAIL:
+        results = self._monitor_email(target, config)
+    elif monitor_type == self.MonitorType.KEYWORD:
+        results = self._monitor_keyword(target, config)
+    elif monitor_type == self.MonitorType.SOCIAL_MEDIA:
+        results = self._monitor_social_media(target, config)
+    elif monitor_type == self.MonitorType.DARK_WEB:
+        results = self._monitor_dark_web(target, config)
+    elif monitor_type == self.MonitorType.VULNERABILITY:
+        results = self._monitor_vulnerability(target, config)
+    elif monitor_type == self.MonitorType.DATA_BREACH:
+        results = self._monitor_data_breach(target, config)
+    elif monitor_type == self.MonitorType.BRAND:
+        results = self._monitor_brand(target, config)
+    elif monitor_type == self.MonitorType.PERSON:
+        results = self._monitor_person(target, config)
+    elif monitor_type == self.MonitorType.COMPETITOR:
+        results = self._monitor_competitor(target, config)
+    elif monitor_type == self.MonitorType.CUSTOM:
+        results = self._monitor_custom(target, config)
+    
+    return results
+
+def _monitor_domain(self, domain, config):
+    """Monitora um domínio"""
+    results = []
+    
+    try:
+        # Usa módulo de domínio
+        module_result = self.module_manager.execute_module('domain_intel', domain, config)
+        
+        if module_result and module_result.get('success', False):
+            results = module_result.get('results', [])
+        
+    except Exception as e:
+        self.logger.error(f"Erro no monitoramento de domínio {domain}: {e}")
+    
+    return results
+
+def _monitor_ip(self, ip, config):
+    """Monitora um endereço IP"""
+    results = []
+    
+    try:
+        # Verifica APIs de IP
+        if self.api_manager:
+            # Shodan
+            shodan_result = self.api_manager.make_request('Shodan', 'host', {'ip': ip})
+            if shodan_result:
+                results.append({
+                    'source': 'shodan',
+                    'data': shodan_result,
+                    'timestamp': datetime.datetime.now().isoformat()
+                })
+        
+    except Exception as e:
+        self.logger.error(f"Erro no monitoramento de IP {ip}: {e}")
+    
+    return results
+
+def _monitor_email(self, email, config):
+    """Monitora um email"""
+    results = []
+    
+    try:
+        # Verifica vazamentos
+        if self.api_manager and 'hibp_api_key' in self.api_manager.apis:
+            hibp_result = self.api_manager.make_request('HaveIBeenPwned', f'breachedaccount/{email}', method='GET')
+            if hibp_result:
+                results.append({
+                    'source': 'hibp',
+                    'data': hibp_result,
+                    'timestamp': datetime.datetime.now().isoformat()
+                })
+        
+    except Exception as e:
+        self.logger.error(f"Erro no monitoramento de email {email}: {e}")
+    
+    return results
+
+def _monitor_keyword(self, keyword, config):
+    """Monitora uma palavra-chave"""
+    results = []
+    
+    # Implementação simplificada
+    # Em produção, integrar com Google Alerts, Mention, etc.
+    
+    return results
+
+# Outros métodos de monitoramento similares...
+
+def _process_monitor_results(self, job, new_results):
+    """Processa resultados do monitoramento"""
+    if not new_results:
+        return []
+    
+    # Busca resultados anteriores
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT data FROM monitor_results 
+    WHERE monitor_id = ? 
+    ORDER BY execution_time DESC 
+    LIMIT 1
+    ''', (job.id,))
+    
+    row = cursor.fetchone()
+    previous_results = []
+    
+    if row and row[0]:
+        try:
+            previous_data = json.loads(row[0])
+            previous_results = previous_data.get('results', [])
+        except:
+            pass
+    
+    # Identifica novos achados
+    new_findings = []
+    
+    for result in new_results:
+        # Verifica se é um resultado novo
+        is_new = True
+        
+        # Comparação simplificada
+        result_hash = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
+        
+        for prev_result in previous_results:
+            prev_hash = hashlib.md5(json.dumps(prev_result, sort_keys=True).encode()).hexdigest()
+            if result_hash == prev_hash:
+                is_new = False
+                break
+        
+        if is_new:
+            new_findings.append(result)
+    
+    # Salva novos resultados
+    if new_results:
+        cursor.execute('''
+        INSERT INTO monitor_results 
+        (monitor_id, execution_time, results_count, new_findings, data)
+        VALUES (?, ?, ?, ?, ?)
+        ''', (
+            job.id,
+            datetime.datetime.now().isoformat(),
+            len(new_results),
+            len(new_findings),
+            json.dumps({'results': new_results}, default=str)
+        ))
+    
+    conn.commit()
+    conn.close()
+    
+    return new_findings
+
+def _generate_alerts(self, job, new_findings):
+    """Gera alertas para novos achados"""
+    for finding in new_findings:
+        # Determina nível do alerta
+        alert_level = self._determine_alert_level(job.type, finding)
+        
+        # Cria alerta
+        alert_id = f"alert_{hashlib.md5(f'{job.id}:{time.time()}:{alert_level}'.encode()).hexdigest()[:8]}"
+        
+        alert = self.Alert(
+            id=alert_id,
+            monitor_id=job.id,
+            level=alert_level,
+            title=f"Novo achado em {job.target}",
+            message=f"Monitoramento {job.type.value} detectou novo achado",
+            data=finding
+        )
+        
+        # Salva alerta
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        INSERT INTO monitor_alerts 
+        (id, monitor_id, level, title, message, data, acknowledged, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            alert.id,
+            alert.monitor_id,
+            alert.level.value,
+            alert.title,
+            alert.message,
+            json.dumps(alert.data, default=str),
+            0,
+            alert.created_at.isoformat()
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        # Dispara notificação
+        self._trigger_notification(alert)
+        
+        self.logger.info(f"Alerta gerado: {alert.id} - {alert.level.value}")
+
+def _determine_alert_level(self, monitor_type, finding):
+    """Determina nível do alerta baseado no tipo e achado"""
+    # Lógica simplificada
+    if monitor_type == self.MonitorType.DATA_BREACH:
+        return self.AlertLevel.HIGH
+    elif monitor_type == self.MonitorType.VULNERABILITY:
+        return self.AlertLevel.MEDIUM
+    elif monitor_type == self.MonitorType.DARK_WEB:
+        return self.AlertLevel.CRITICAL
+    else:
+        return self.AlertLevel.LOW
+
+def _trigger_notification(self, alert):
+    """Dispara notificação do alerta"""
+    # Verifica se notificações estão habilitadas
+    notifications_enabled = self.config.get('Notifications', 'notifications_enabled', False)
+    if not notifications_enabled:
+        return
+    
+    # Configurações de notificação
+    notification_service = self.config.get('Notifications', 'notification_service', 'email')
+    
+    try:
+        if notification_service == 'email':
+            self._send_email_notification(alert)
+        elif notification_service == 'webhook':
+            self._send_webhook_notification(alert)
+        elif notification_service == 'slack':
+            self._send_slack_notification(alert)
+        elif notification_service == 'telegram':
+            self._send_telegram_notification(alert)
+        
+    except Exception as e:
+        self.logger.error(f"Erro ao enviar notificação: {e}")
+
+def _send_email_notification(self, alert):
+    """Envia notificação por email"""
+    # Implementação simplificada
+    smtp_server = self.config.get('Integrations', 'smtp_server', '')
+    smtp_port = self.config.get('Integrations', 'smtp_port', 587)
+    smtp_username = self.config.get('Integrations', 'smtp_username', '')
+    smtp_password = self.config.get('Integrations', 'smtp_password', '')
+    from_email = self.config.get('Integrations', 'from_email', '')
+    to_emails = self.config.get('Integrations', 'to_emails', '')
+    
+    if not all([smtp_server, smtp_username, smtp_password, from_email, to_emails]):
+        return
+    
+    # Em produção, implementar envio real de email
+    self.logger.info(f"Notificação por email preparada para alerta {alert.id}")
+
+def _send_webhook_notification(self, alert):
+    """Envia notificação para webhook"""
+    webhook_url = self.config.get('Integrations', 'custom_webhook_url', '')
+    
+    if not webhook_url:
+        return
+    
+    import requests
+    
+    payload = {
+        'alert_id': alert.id,
+        'level': alert.level.value,
+        'title': alert.title,
+        'message': alert.message,
+        'timestamp': alert.created_at.isoformat(),
+        'data': alert.data
+    }
+    
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        if response.status_code == 200:
+            self.logger.info(f"Webhook notificado para alerta {alert.id}")
+        else:
+            self.logger.warning(f"Falha no webhook: {response.status_code}")
+    except Exception as e:
+        self.logger.error(f"Erro no webhook: {e}")
+
+def _send_slack_notification(self, alert):
+    """Envia notificação para Slack"""
+    webhook_url = self.config.get('Integrations', 'slack_webhook_url', '')
+    
+    if not webhook_url:
+        return
+    
+    import requests
+    
+    # Determina cor baseada no nível
+    color_map = {
+        self.AlertLevel.INFO: '#36a64f',
+        self.AlertLevel.LOW: '#2eb886',
+        self.AlertLevel.MEDIUM: '#ffa500',
+        self.AlertLevel.HIGH: '#ff4500',
+        self.AlertLevel.CRITICAL: '#8b0000'
+    }
+    
+    payload = {
+        'attachments': [{
+            'color': color_map.get(alert.level, '#36a64f'),
+            'title': alert.title,
+            'text': alert.message,
+            'fields': [
+                {
+                    'title': 'Nível',
+                    'value': alert.level.value.upper(),
+                    'short': True
+                },
+                {
+                    'title': 'Monitor',
+                    'value': alert.monitor_id,
+                    'short': True
+                }
+            ],
+            'ts': int(alert.created_at.timestamp())
+        }]
+    }
+    
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        if response.status_code == 200:
+            self.logger.info(f"Slack notificado para alerta {alert.id}")
+    except Exception as e:
+        self.logger.error(f"Erro no Slack: {e}")
+
+def _send_telegram_notification(self, alert):
+    """Envia notificação para Telegram"""
+    bot_token = self.config.get('Integrations', 'telegram_bot_token', '')
+    chat_id = self.config.get('Integrations', 'telegram_chat_id', '')
+    
+    if not bot_token or not chat_id:
+        return
+    
+    import requests
+    
+    message = f"""
+    *{alert.title}*
+    
+    Nível: {alert.level.value.upper()}
+    Monitor: {alert.monitor_id}
+    
+    {alert.message}
+    
+    Timestamp: {alert.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+    """
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            self.logger.info(f"Telegram notificado para alerta {alert.id}")
+    except Exception as e:
+        self.logger.error(f"Erro no Telegram: {e}")
+
+def get_active_jobs(self):
+    """Obtém jobs ativos"""
+    return list(self.active_jobs.values())
+
+def get_job(self, job_id):
+    """Obtém um job específico"""
+    return self.active_jobs.get(job_id)
+
+def update_job(self, job_id, **kwargs):
+    """Atualiza um job"""
+    if job_id not in self.active_jobs:
+        return False
+    
+    job = self.active_jobs[job_id]
+    
+    # Atualiza campos
+    for key, value in kwargs.items():
+        if hasattr(job, key):
+            setattr(job, key, value)
+    
+    # Atualiza banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    UPDATE monitor_jobs 
+    SET type = ?, target = ?, schedule = ?, enabled = ?, config = ?
+    WHERE id = ?
+    ''', (
+        job.type.value,
+        job.target,
+        job.schedule,
+        1 if job.enabled else 0,
+        json.dumps(job.config),
+        job.id
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    # Reagenda job se necessário
+    if self.scheduler:
+        # Remove job existente
+        self.scheduler.remove_job(job_id)
+        
+        # Adiciona novamente se estiver habilitado
+        if job.enabled:
+            self._schedule_job(job)
+    
+    self.logger.info(f"Job atualizado: {job_id}")
+    return True
+
+def delete_job(self, job_id):
+    """Exclui um job"""
+    if job_id not in self.active_jobs:
+        return False
+    
+    # Remove do scheduler
+    if self.scheduler:
+        try:
+            self.scheduler.remove_job(job_id)
+        except:
+            pass
+    
+    # Remove dos jobs ativos
+    del self.active_jobs[job_id]
+    
+    # Remove do banco de dados
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM monitor_jobs WHERE id = ?", (job_id,))
+    cursor.execute("DELETE FROM monitor_results WHERE monitor_id = ?", (job_id,))
+    cursor.execute("DELETE FROM monitor_alerts WHERE monitor_id = ?", (job_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    self.logger.info(f"Job excluído: {job_id}")
+    return True
+
+def get_alerts(self, acknowledged=None, level=None, limit=100):
+    """Obtém alertas"""
+    conn = sqlite3.connect(self.db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = "SELECT * FROM monitor_alerts"
+    conditions = []
+    params = []
+    
+    if acknowledged is not None:
+        conditions.append("acknowledged = ?")
+        params.append(1 if acknowledged else 0)
+    
+    if level:
+        conditions.append("level = ?")
+        params.append(level.value)
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    
+    alerts = []
+    for row in rows:
+        alert = self.Alert(
+            id=row['id'],
+            monitor_id=row['monitor_id'],
+            level=self.AlertLevel(row['level']),
+            title=row['title'],
+            message=row['message'],
+            data=json.loads(row['data']) if row['data'] else {},
+            acknowledged=bool(row['acknowledged']),
+            acknowledged_by=row['acknowledged_by'],
+            acknowledged_at=datetime.datetime.fromisoformat(row['acknowledged_at']) if row['acknowledged_at'] else None,
+            created_at=datetime.datetime.fromisoformat(row['created_at'])
+        )
+        alerts.append(alert)
+    
+    conn.close()
+    return alerts
+
+def acknowledge_alert(self, alert_id, acknowledged_by="user"):
+    """Marca alerta como reconhecido"""
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    UPDATE monitor_alerts 
+    SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = ?
+    WHERE id = ?
+    ''', (
+        acknowledged_by,
+        datetime.datetime.now().isoformat(),
+        alert_id
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    self.logger.info(f"Alerta reconhecido: {alert_id}")
+    return True
+
+def get_monitor_stats(self, days=30):
+    """Obtém estatísticas de monitoramento"""
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+    
+    # Total de jobs
+    cursor.execute("SELECT COUNT(*) FROM monitor_jobs")
+    total_jobs = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM monitor_jobs WHERE enabled = 1")
+    active_jobs = cursor.fetchone()[0]
+    
+    # Execuções recentes
+    cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
+    
+    cursor.execute('''
+    SELECT 
+        COUNT(*) as total_runs,
+        SUM(new_findings) as total_findings,
+        AVG(results_count) as avg_results
+    FROM monitor_results 
+    WHERE execution_time > ?
+    ''', (cutoff_date,))
+    
+    stats_row = cursor.fetchone()
+    
+    # Alertas recentes
+    cursor.execute('''
+    SELECT 
+        level,
+        COUNT(*) as count
+    FROM monitor_alerts 
+    WHERE created_at > ?
+    GROUP BY level
+    ''', (cutoff_date,))
+    
+    alert_counts = cursor.fetchall()
+    
+    conn.close()
+    
+    stats = {
+        'total_jobs': total_jobs,
+        'active_jobs': active_jobs,
+        'total_runs': stats_row[0] if stats_row[0] else 0,
+        'total_findings': stats_row[1] if stats_row[1] else 0,
+        'avg_results': float(stats_row[2]) if stats_row[2] else 0,
+        'alert_counts': {level: count for level, count in alert_counts},
+        'period_days': days
+    }
+    
+    return stats
+
+def run_manual_monitor(self, job_type, target, config=None):
+    """Executa monitoramento manual"""
+    if config is None:
+        config = {}
+    
+    self.logger.info(f"Monitoramento manual: {job_type} - {target}")
+    
+    results = self._execute_monitoring(self.MonitorType(job_type), target, config)
+    
+    return {
+        'success': True,
+        'target': target,
+        'type': job_type,
+        'results_count': len(results),
+        'results': results,
+        'timestamp': datetime.datetime.now().isoformat()
+    }
+
+def stop(self):
+    """Para o sistema de monitoramento"""
+    if self.scheduler:
+        self.scheduler.shutdown()
+        self.logger.info("Sistema de monitoramento parado")
